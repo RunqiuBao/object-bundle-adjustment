@@ -1,5 +1,5 @@
 import torch
-from torch.func import vmap
+from functorch import vmap
 from micro_bundle_adjustment.api import projection, optimize_simple_radial
 
 if __name__ == "__main__":
@@ -29,13 +29,21 @@ if __name__ == "__main__":
     noisy_r = r + torch.randn_like(r).clamp(-1,1)*0.01
     noisy_t = t + torch.randn_like(t).clamp(-1,1)*0.5
     noisy_k = torch.randn_like(f).clamp(-1,1)*0.01
-        
+    
     with torch.no_grad():
-        X_hat, theta_hat = optimize_simple_radial(X_0, noisy_f, noisy_principal_point, noisy_k, noisy_r, noisy_t, 
-                                                  observations, 
-                                                  dtype=dtype, L_0 = 1e-2, num_steps = 5)
-        
-    print(theta_hat)
+        X_hat, theta_hat = optimize_simple_radial(
+            X_0,
+            noisy_f,
+            noisy_principal_point,
+            noisy_k,
+            noisy_r,
+            noisy_t, 
+            observations, 
+            dtype=dtype,
+            L_0 = 1e-2,
+            num_steps = 5)
+
+    print("theta_hat: \n", theta_hat)
     
     X = (X-X.mean(dim=0))
     X_hat = (X_hat-X_hat.mean(dim=0))

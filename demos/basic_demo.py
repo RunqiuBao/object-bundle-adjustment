@@ -1,5 +1,5 @@
 import torch
-from torch.func import vmap
+from functorch import vmap
 from kornia.geometry import axis_angle_to_rotation_matrix, relative_camera_motion, rotation_matrix_to_axis_angle
 from micro_bundle_adjustment.api import projection, optimize_calibrated
 
@@ -20,6 +20,7 @@ if __name__ == "__main__":
 
     observations = [(x_a, torch.arange(len(X), device = device))] + \
         [(x_b, torch.arange(len(X), device = device))]
+
     X_0 = X + torch.randn_like(X).clamp(-1,1)*0.05
     noisy_r = r + torch.randn_like(r).clamp(-1,1)*0.01
     noisy_t = t + torch.randn_like(t).clamp(-1,1)*0.5
