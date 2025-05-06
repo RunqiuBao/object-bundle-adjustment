@@ -130,8 +130,8 @@ def lm_optimize(f, X_0, theta_0, observations, stereo_baseline=None, intrinsics=
             residuals_im_print = residuals_im.clone()
             residuals_im_print[:, [0, 2]] *= intrinsics[0]
             residuals_im_print[:, 1] *= intrinsics[1]
-            print(f"final residuals ({image_idx}-th frame) is\n", residuals_im_print)
-            print("--------------------")
+            # print(f"final residuals ({image_idx}-th frame) is\n", residuals_im_print)
+            # print("--------------------")
             all_residuals.append(residuals_im_print)
 
         # Check if new loss better, if so reduce L, else increase L
@@ -142,7 +142,7 @@ def lm_optimize(f, X_0, theta_0, observations, stereo_baseline=None, intrinsics=
         else:
             L = L*10
         print(f"{loss_new=} {loss=} {L=}")
-        print("===========================")
+        # print("===========================")
     if stereo_baseline is not None:
         return X, theta, (X - X_0), (theta - theta_0), all_residuals
     else:

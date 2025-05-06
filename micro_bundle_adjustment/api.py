@@ -1,6 +1,8 @@
 import torch
-from kornia.geometry import axis_angle_to_rotation_matrix, quaternion_to_rotation_matrix, rotation_matrix_to_angle_axis, axis_angle_to_quaternion, rotation_matrix_to_quaternion
+from kornia.geometry import axis_angle_to_rotation_matrix, quaternion_to_rotation_matrix, rotation_matrix_to_quaternion, rotation_matrix_to_axis_angle
 from .optimizer import lm_optimize
+from .debugs import DebugObjectTargetAssignment
+import numpy as np
 import copy
 
 def projection(X, r, t):
@@ -87,6 +89,7 @@ def optimize_simple_radial(X_0, f, principal_point, k, r_0, t_0, observations, d
 def optimize_obj_lm(
     poses,
     obj_2dkeypts,  # (NumObjects, NumKeypts, 3)
+    obj_2dcorners,
     uniqueobj_3dkeypts_inworld,  # (NumUniqueObjects, 4, 3)
     uniqueobj_3dcorners_inworld,  # (NumUniqueObjects, 16, 3)
     uniqueobj_labels,
@@ -207,27 +210,53 @@ def optimize_obj_lm(
         rm_i = quaternion_to_rotation_matrix(q_i_inv_)
         t_i_inv = poses[indexFrame][:3].clone()
         t_i_inv = -rm_i @ t_i_inv
-        raa_i = rotation_matrix_to_angle_axis(rm_i)
+        raa_i = rotation_matrix_to_axis_angle(rm_i)
         pose_vector.append(torch.cat([raa_i, t_i_inv], dim=0).unsqueeze(0))
     pose_vector = torch.cat(pose_vector, dim=0)  # (NumFrames, 6)
     pose_indices = torch.Tensor(pose_indices).to(device=device)  # (NumFrames,)
     fixed_poses_mask = torch.Tensor(fixed_poses_mask).to(device=device, dtype=torch.bool)  # do not update the fixed frame poses.
 
     # start optimization
-    pts_vector_hat, pose_vector_hat, delta_x, delta_theta, all_residuals = lm_optimize(
-        calibrated_stereo_residuals,
-        pts_vector,
-        pose_vector,
-        observations,
-        stereo_baseline=intrinsics[-1].item(),
-        intrinsics=intrinsics.cpu().numpy(),
-        dtype=dtype,
-        L_0 = L_0,
-        num_steps=num_steps)
+    try:
+        pts_vector_hat, pose_vector_hat, delta_x, delta_theta, all_residuals = lm_optimize(
+            calibrated_stereo_residuals,
+            pts_vector,
+            pose_vector,
+            observations,
+            stereo_baseline=intrinsics[-1].item(),
+            intrinsics=intrinsics.cpu().numpy(),
+            dtype=dtype,
+            L_0 = L_0,
+            num_steps=num_steps)
 
-    for indexR, residuals in enumerate(all_residuals):
-        print(f"final residuals ({indexR}-th frame) is\n", residuals)
-        print("--------------------")
+        toRaise = False
+        for indexR, residuals in enumerate(all_residuals):
+            print(f"final residuals ({all_related_frames_indices[indexR]}-th frame) is\n", residuals)
+            if torch.abs(residuals).max() > 10:
+                toRaise = True
+            print("--------------------")
+        if toRaise:
+            raise
+    except:
+        pts_vector_hat, pose_vector_hat, delta_x, delta_theta, all_residuals = lm_optimize(
+            calibrated_stereo_residuals,
+            pts_vector,
+            pose_vector,
+            observations,
+            stereo_baseline=intrinsics[-1].item(),
+            intrinsics=intrinsics.cpu().numpy(),
+            dtype=dtype,
+            L_0 = L_0,
+            num_steps=num_steps*2)
+
+        toRaise = False
+        for indexR, residuals in enumerate(all_residuals):
+            print(f"final residuals ({indexR}-th frame) is\n", residuals)
+            if torch.abs(residuals).max() > 10:
+                import inspect; from IPython import embed; print('in {}!'.format(inspect.currentframe().f_code.co_name)); embed()
+            print("--------------------")
+        if toRaise:
+            raise
 
     # update points
     delta_x_foreachobj = delta_x[pts_keyptindices_mask]
@@ -249,8 +278,8 @@ def optimize_obj_lm(
         val = pts_corners_uniqueobjindices_vector[i]
         offsets_corners[i] = counts[val]
         counts[val] += 1
-    uniqueobj_3dkeypts_inworld[pts_uniqueobjindices_vector, offsets] += delta_x_final
-    uniqueobj_3dcorners_inworld[pts_corners_uniqueobjindices_vector, offsets_corners] += delta_x_corners_final
+    uniqueobj_3dkeypts_inworld[pts_uniqueobjindices_vector, offsets] += delta_x_final.clone()
+    uniqueobj_3dcorners_inworld[pts_corners_uniqueobjindices_vector, offsets_corners] += delta_x_corners_final.clone()
 
     # update poses
     delta_theta_quaternion = torch.zeros(delta_theta.shape[0], 7).to(device=delta_theta.device, dtype=delta_theta.dtype)
@@ -259,6 +288,35 @@ def optimize_obj_lm(
     Qs = rotation_matrix_to_quaternion(Rs)
     Qs = torch.cat([Qs[:, 1:], Qs[:, :1]], dim=1)
     delta_theta_quaternion[:, 3:] = Qs
-    poses[pose_indices.to(torch.long)[~fixed_poses_mask]] = delta_theta_quaternion[~fixed_poses_mask]
+    poses[pose_indices.to(torch.long)[~fixed_poses_mask]] = delta_theta_quaternion[~fixed_poses_mask].clone()
+    print("frames to update: \n{}".format(pose_indices.to(torch.long)[~fixed_poses_mask]))
+    print("pose_indices: \n{}".format(pose_indices))
+    print("fixed_poses_mask: \n{}".format(fixed_poses_mask.to(dtype=torch.int8)))
+    print("===========================")
 
+    isBug = DebugObjectTargetAssignment(
+        poses.cpu().numpy(),
+        objlabel_numkeypts.cpu().numpy(),
+        obj_labels.cpu().numpy(),
+        uniqueobj_3dkeypts_inworld.cpu().numpy(),
+        uniqueobj_3dcorners_inworld.cpu().numpy(),
+        obj_uniqueobj_indices.cpu().numpy(),
+        obj_2dkeypts.cpu().numpy(),
+        obj_2dcorners.cpu().numpy(),
+        obj_ii.cpu().numpy(),
+        obj_jj.cpu().numpy(),
+        obj_kk.cpu().numpy(),
+        targetObjectIndices.cpu().numpy(),
+        {
+            "cameraKK": np.array([[intrinsics[0].item(), 0, intrinsics[2].item()], [0, intrinsics[1].item(), intrinsics[3].item()], [0, 0, 1]]),
+            "imageShape": (480, 640)
+        },
+        "/root/code/DEVO/debugImages/"
+    )
+    if isBug:
+        import IPython; import inspect; print('baodebug: file ({}) -- func ({})'.format(__file__, inspect.stack()[0].function)); IPython.embed()
     return uniqueobj_3dkeypts_inworld, uniqueobj_3dcorners_inworld, poses
+
+'''
+compare_reproj(14, poses, 42, obj_uniqueobj_indices, obj_2dkeypts, uniqueobj_3dkeypts_inworld, intrinsics)
+'''
